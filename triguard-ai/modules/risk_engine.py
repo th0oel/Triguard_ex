@@ -335,12 +335,15 @@ def calc_integrated_risk(
     result = manpower_df.copy()
 
     if jibang_dc_df is not None and not jibang_dc_df.empty:
-        result = result.merge(
-            jibang_dc_df[["지방청", "감염병DC"]],
-            on="지방청",
-            how="left",
-        )
-        # 매핑 안 된 지방청은 전국 대표값으로 채움
+        dc_lookup = jibang_dc_df[["지방청", "감염병DC"]].copy().reset_index(drop=True)
+        result = result.merge(dc_lookup, on="지방청", how="left")
+
+        unmatched = result[result["감염병DC"].isna()]["지방청"].tolist()
+        if unmatched:
+            warnings.append(
+                f"지방청-DC 매핑 실패 (전국 대표값 적용): {unmatched}. "
+                f"jibang_dc_df 보유 지방청: {dc_lookup['지방청'].tolist()}"
+            )
         result["감염병DC"] = result["감염병DC"].fillna(round(disease_dc, 2))
     else:
         result["감염병DC"] = round(disease_dc, 2)
