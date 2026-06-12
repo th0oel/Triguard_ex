@@ -167,20 +167,60 @@ def calc_manpower_risk(exam_df: pd.DataFrame, enlist_df: pd.DataFrame, exempt_df
 # ─────────────────────────────────────────────
 
 def calc_disease_dc(
-    regional_df: pd.DataFrame,     # 지역별 발생현황 (시도, 총발생률)
-    national_weighted: float,      # 질병별 등급 가중합
-    influenza_df: pd.DataFrame,    # 인플루엔자 (절기, 최대분율, 평균분율)
-    ari_series: pd.Series,         # 급성호흡기 (연도 index, 총합계)
+    regional_df: pd.DataFrame,              # 시도별 발생현황 (시도, 총발생률) — 표시용
+    national_weighted: float,               # 질병별 등급 가중합
+    influenza_df: pd.DataFrame,             # 인플루엔자 (절기, 최대분율, 평균분율)
+    ari_series: pd.Series,                  # 급성호흡기 (연도 index, 총합계)
+    jibang_disease_df: pd.DataFrame = None, # 지방청별 총발생률 (aggregate_disease_by_jibang 결과)
 ) -> tuple:
     """
     감염병 Disruption Coefficient 계산.
-    반환: (dc_score float, component_dict, warnings)
-    - dc_score: 0~100 전국 단위 DC (지역별은 regional_df 기반 지수로 변환)
+    반환: (dc_score_national, regional_df_scored, jibang_dc_df, components, warnings)
+    - dc_score_national: 전국 대표값 (fallback용)
+    - jibang_dc_df: 지방청별 감염병DC DataFrame [지방청, 발생률지수, 감염병DC]
     """
     warnings = validate_weights(WEIGHTS_DISEASE, "감염병 DC")
 
-    # ① 지역별 발생률 지수 (전국 최대값 대비 정규화 → 0~100)
-    if regional_df is not None and not regional_df.empty and "총발생률" in regional_df.columns:
+    # ── 공통 국가 수준 지표 ──────────────────────
+    # ② 질병 등급 가중합 → 100점 스케일
+    grade_score = clip_score(np.log1p(national_weighted) * 5) if national_weighted > 0 else 0.0
+
+    # ③ 인플루엔자 유행강도
+    if influenza_df is not None and not influenza_df.empty:
+        latest_max = influenza_df["최대분율"].dropna().iloc[-1] if len(influenza_df) > 0 else 0
+        flu_score = clip_score(float(latest_max) * 2.5)
+    else:
+        flu_score = 30.0
+
+    # ④ 급성호흡기 트렌드
+    if ari_series is not None and len(ari_series) >= 2:
+        vals = ari_series.sort_index().values
+        ari_trend = safe_divide(vals[-1] - vals[-2], vals[-2] + 1e-9) * 100
+        ari_score = clip_score(50 + ari_trend)
+    else:
+        ari_score = 30.0
+
+    def _dc_from_regional_index(regional_idx: float) -> float:
+        return clip_score(
+            WEIGHTS_DISEASE["지역별_발생률"]        * regional_idx +
+            WEIGHTS_DISEASE["질병_등급_가중합"]      * grade_score +
+            WEIGHTS_DISEASE["인플루엔자_유행_강도"] * flu_score +
+            WEIGHTS_DISEASE["급성호흡기_트렌드"]    * ari_score
+        )
+
+    # ── ① 지방청별 발생률 지수 및 DC ────────────
+    jibang_dc_df = None
+    if jibang_disease_df is not None and not jibang_disease_df.empty and "총발생률" in jibang_disease_df.columns:
+        max_rate = jibang_disease_df["총발생률"].max()
+        jd = jibang_disease_df.copy()
+        jd["발생률지수"] = jd["총발생률"].apply(
+            lambda x: clip_score(safe_divide(x, max_rate) * 100)
+        )
+        jd["감염병DC"] = jd["발생률지수"].apply(_dc_from_regional_index).round(2)
+        jibang_dc_df = jd[["지방청", "발생률지수", "감염병DC"]]
+        avg_regional = jd["발생률지수"].mean()
+    elif regional_df is not None and not regional_df.empty and "총발생률" in regional_df.columns:
+        # 지방청 매핑 없이 시도 평균으로 fallback
         max_rate = regional_df["총발생률"].max()
         regional_df = regional_df.copy()
         regional_df["발생률지수"] = regional_df["총발생률"].apply(
@@ -189,43 +229,27 @@ def calc_disease_dc(
         avg_regional = regional_df["발생률지수"].mean()
     else:
         regional_df = pd.DataFrame()
-        avg_regional = 50.0  # 데이터 없을 때 중간값
+        avg_regional = 50.0
 
-    # ② 질병 등급 가중합 → 100점 스케일
-    # 실제값 범위 불명이므로 log 변환 후 clip
-    grade_score = clip_score(np.log1p(national_weighted) * 5) if national_weighted > 0 else 0.0
+    # ── 시도별 표시용 regional_df 정규화 ─────────
+    if regional_df is not None and not regional_df.empty and "총발생률" in regional_df.columns and "발생률지수" not in regional_df.columns:
+        max_rate = regional_df["총발생률"].max()
+        regional_df = regional_df.copy()
+        regional_df["발생률지수"] = regional_df["총발생률"].apply(
+            lambda x: clip_score(safe_divide(x, max_rate) * 100)
+        )
 
-    # ③ 인플루엔자 유행강도 (최근 절기 최대 의사환자분율 → 100점)
-    if influenza_df is not None and not influenza_df.empty:
-        latest_max = influenza_df["최대분율"].dropna().iloc[-1] if len(influenza_df) > 0 else 0
-        # 분율 기준: 통상 40 초과 = 유행, 100점 기준으로 2.5배 스케일
-        flu_score = clip_score(float(latest_max) * 2.5)
-    else:
-        flu_score = 30.0  # 기본값
-
-    # ④ 급성호흡기 트렌드 (최근 2년 증감률 → 0~100)
-    if ari_series is not None and len(ari_series) >= 2:
-        vals = ari_series.sort_index().values
-        ari_trend = safe_divide(vals[-1] - vals[-2], vals[-2] + 1e-9) * 100
-        ari_score = clip_score(50 + ari_trend)  # 증가=위험, 기준=50
-    else:
-        ari_score = 30.0
-
-    dc_score = (
-        WEIGHTS_DISEASE["지역별_발생률"]        * avg_regional +
-        WEIGHTS_DISEASE["질병_등급_가중합"]      * grade_score +
-        WEIGHTS_DISEASE["인플루엔자_유행_강도"] * flu_score +
-        WEIGHTS_DISEASE["급성호흡기_트렌드"]    * ari_score
-    )
+    # 전국 대표 DC (fallback/디스플레이용)
+    dc_score_national = _dc_from_regional_index(avg_regional)
 
     components = {
-        "지역별_발생률_지수":     round(avg_regional, 2),
-        "질병_등급_가중합_지수":  round(grade_score, 2),
-        "인플루엔자_강도_지수":   round(flu_score, 2),
-        "급성호흡기_트렌드_지수": round(ari_score, 2),
+        "지역별_발생률_지수(전국평균)": round(avg_regional, 2),
+        "질병_등급_가중합_지수":        round(grade_score, 2),
+        "인플루엔자_강도_지수":         round(flu_score, 2),
+        "급성호흡기_트렌드_지수":       round(ari_score, 2),
     }
 
-    return clip_score(dc_score), regional_df, components, warnings
+    return dc_score_national, regional_df, jibang_dc_df, components, warnings
 
 
 # ─────────────────────────────────────────────
@@ -295,24 +319,38 @@ def calc_material_risk(
 # ─────────────────────────────────────────────
 
 def calc_integrated_risk(
-    manpower_df: pd.DataFrame,  # 지방청별 인력Risk 포함
-    disease_dc: float,          # 전국 감염병 DC
-    material_score: float,      # 전국 물자 Risk
+    manpower_df: pd.DataFrame,              # 지방청별 인력Risk 포함
+    disease_dc: float,                      # 전국 감염병 DC (지방청 매핑 없을 때 fallback)
+    material_score: float,                  # 전국 물자 Risk
+    jibang_dc_df: pd.DataFrame = None,      # 지방청별 감염병DC [지방청, 감염병DC]
 ) -> pd.DataFrame:
     """
     지방청별 통합 Risk Score 계산.
-    감염병·물자는 전국 단일값을 모든 지방청에 동일 적용.
+    jibang_dc_df가 있으면 지방청별 감염병DC를 각각 적용.
+    매핑이 없는 지방청은 전국 대표값(disease_dc)으로 fallback.
+    물자는 지역 데이터 없으므로 전국 단일값 동일 적용.
     """
     warnings = validate_weights(WEIGHTS_INTEGRATED, "통합 Risk")
 
     result = manpower_df.copy()
-    result["감염병DC"]  = round(disease_dc, 2)
-    result["물자Risk"]  = round(material_score, 2)
+
+    if jibang_dc_df is not None and not jibang_dc_df.empty:
+        result = result.merge(
+            jibang_dc_df[["지방청", "감염병DC"]],
+            on="지방청",
+            how="left",
+        )
+        # 매핑 안 된 지방청은 전국 대표값으로 채움
+        result["감염병DC"] = result["감염병DC"].fillna(round(disease_dc, 2))
+    else:
+        result["감염병DC"] = round(disease_dc, 2)
+
+    result["물자Risk"] = round(material_score, 2)
 
     result["통합Risk"] = result.apply(
         lambda r: clip_score(
             WEIGHTS_INTEGRATED["인력"]   * r["인력Risk"] +
-            WEIGHTS_INTEGRATED["감염병"] * disease_dc +
+            WEIGHTS_INTEGRATED["감염병"] * r["감염병DC"] +
             WEIGHTS_INTEGRATED["물자"]   * material_score
         ), axis=1
     ).round(2)

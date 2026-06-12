@@ -76,10 +76,10 @@ def render_kpi_cards(result_df: pd.DataFrame):
     total   = len(result_df)
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("🔴 위험 지역", f"{danger}개", delta=None)
-    col2.metric("🟡 주의 지역", f"{caution}개", delta=None)
-    col3.metric("🟢 정상 지역", f"{normal}개", delta=None)
-    col4.metric("📍 전체 권역", f"{total}개", delta=None)
+    col1.metric("위험 지역", f"{danger}개", delta=None)
+    col2.metric("주의 지역", f"{caution}개", delta=None)
+    col3.metric("정상 지역", f"{normal}개", delta=None)
+    col4.metric("전체 권역", f"{total}개", delta=None)
 
 
 # ─────────────────────────────────────────────
@@ -145,14 +145,14 @@ def render_manpower_detail(manpower_df: pd.DataFrame):
 
 def render_disease_components(components: dict, dc_score: float):
     """감염병 DC 구성요소 표시."""
-    st.metric("📊 감염병 Disruption Coefficient", f"{dc_score:.1f} / 100")
+    st.metric("감염병 Disruption Coefficient (전국 대표값)", f"{dc_score:.1f} / 100")
     comp_df = pd.DataFrame(list(components.items()), columns=["지표", "점수"])
     st.dataframe(comp_df, use_container_width=True)
 
 
 def render_material_components(components: dict, mat_score: float):
     """물자 Risk 구성요소 표시."""
-    st.metric("🏭 물자 Risk Score (전국)", f"{mat_score:.1f} / 100")
+    st.metric("물자 Risk Score (전국)", f"{mat_score:.1f} / 100")
     comp_df = pd.DataFrame(list(components.items()), columns=["지표", "점수"])
     st.dataframe(comp_df, use_container_width=True)
 
@@ -164,42 +164,42 @@ def render_material_components(components: dict, mat_score: float):
 RESPONSE_GUIDE = {
     "위험": {
         "인력": [
-            "📌 해당 권역 병무청에 병역판정검사 임시 확대 실시 검토",
-            "📌 인접 지방청 자원 재배분 가능 여부 긴급 검토",
-            "📌 입영 기피자 사유 조사 및 행정 지도 강화",
-            "📌 전시근로역·보충역 활용 가능성 검토",
+            "해당 권역 병무청에 병역판정검사 임시 확대 실시 검토",
+            "인접 지방청 자원 재배분 가능 여부 긴급 검토",
+            "입영 기피자 사유 조사 및 행정 지도 강화",
+            "전시근로역·보충역 활용 가능성 검토",
         ],
         "감염병": [
-            "🦠 감염병 확산 지역 병역판정검사 일정 조정 고려",
-            "🦠 입영 전 건강검진 항목 추가 및 감염병 검사 의무화",
-            "🦠 입영 집결지 방역 강화 및 격리시설 사전 확보",
-            "🦠 질병관리청 긴급대응팀과 정보 공유 체계 가동",
+            "감염병 확산 지역 병역판정검사 일정 조정 고려",
+            "입영 전 건강검진 항목 추가 및 감염병 검사 의무화",
+            "입영 집결지 방역 강화 및 격리시설 사전 확보",
+            "질병관리청 긴급대응팀과 정보 공유 체계 가동",
         ],
         "물자": [
-            "🔧 주요 군수품 긴급 국내 대체 조달 방안 수립",
-            "🔧 국외 의존 품목 국내 대체 공급선 확보 추진",
-            "🔧 전략물자 비축 현황 점검 및 긴급 확충 요청",
-            "🔧 수의계약 과도 의존 품목 경쟁 입찰 전환 검토",
+            "주요 군수품 긴급 국내 대체 조달 방안 수립",
+            "국외 의존 품목 국내 대체 공급선 확보 추진",
+            "전략물자 비축 현황 점검 및 긴급 확충 요청",
+            "수의계약 과도 의존 품목 경쟁 입찰 전환 검토",
         ],
     },
     "주의": {
         "인력": [
-            "⚠️ 병역판정검사 처분인원 감소 추세 모니터링 강화",
-            "⚠️ 입영 차질 요인 분석 및 사전 대응 계획 수립",
+            "병역판정검사 처분인원 감소 추세 모니터링 강화",
+            "입영 차질 요인 분석 및 사전 대응 계획 수립",
         ],
         "감염병": [
-            "⚠️ 감염병 동향 주간 모니터링 및 예방 지침 배포",
-            "⚠️ 유관 기관(질병관리청) 데이터 연계 점검",
+            "감염병 동향 주간 모니터링 및 예방 지침 배포",
+            "유관 기관(질병관리청) 데이터 연계 점검",
         ],
         "물자": [
-            "⚠️ 공급업체 집중도 완화를 위한 복수 공급선 발굴",
-            "⚠️ 국외 조달 비중 분기별 점검 및 보고",
+            "공급업체 집중도 완화를 위한 복수 공급선 발굴",
+            "국외 조달 비중 분기별 점검 및 보고",
         ],
     },
     "정상": {
-        "인력":   ["✅ 현 수준 유지 및 정기 모니터링 지속"],
-        "감염병": ["✅ 표준 감시 체계 유지"],
-        "물자":   ["✅ 정기 조달 계획 이행 점검"],
+        "인력":   ["현 수준 유지 및 정기 모니터링 지속"],
+        "감염병": ["표준 감시 체계 유지"],
+        "물자":   ["정기 조달 계획 이행 점검"],
     },
 }
 
@@ -210,7 +210,7 @@ def render_response_guide(result_df: pd.DataFrame):
     ※ 향후 RAG 기반 대응 가이드로 확장 예정
     """
     st.caption(
-        "ℹ️ 현재 MVP에서는 **rule-based 대응 가이드**를 제공합니다. "
+        "현재 MVP에서는 rule-based 대응 가이드를 제공합니다. "
         "향후 RAG 기반 대응 가이드로 확장 예정입니다."
     )
 
@@ -222,7 +222,7 @@ def render_response_guide(result_df: pd.DataFrame):
             continue
         for region in region_list:
             row = result_df[result_df["지방청"] == region].iloc[0]
-            with st.expander(f"{'🔴' if label == '위험' else '🟡'} [{region}] 대응 가이드 (통합Risk: {row['통합Risk']})"):
+            with st.expander(f"[{label}] {region} — 통합Risk: {row['통합Risk']}"):
                 guide = RESPONSE_GUIDE.get(label, {})
 
                 # 어느 영역이 가장 위험한지 판단
@@ -239,7 +239,7 @@ def render_response_guide(result_df: pd.DataFrame):
                     st.markdown(f"- {action}")
 
     if not danger_regions and not caution_regions:
-        st.success("✅ 현재 전 권역 정상 수준입니다. 정기 모니터링을 지속하세요.")
+        st.success("현재 전 권역 정상 수준입니다. 정기 모니터링을 지속하세요.")
 
 
 # ─────────────────────────────────────────────

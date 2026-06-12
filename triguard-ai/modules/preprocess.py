@@ -27,6 +27,27 @@ STANDARD_REGIONS = [
     "전북", "전남", "경북", "경남", "제주",
 ]
 
+# 시도 → 지방청 매핑 (1:N 허용 - 경기·강원은 두 지방청으로 분할)
+SIDO_TO_JIBANG_MAP: dict[str, list[str]] = {
+    "서울":  ["서울"],
+    "부산":  ["부산울산"],
+    "울산":  ["부산울산"],
+    "대구":  ["대구경북"],
+    "경북":  ["대구경북"],
+    "인천":  ["인천"],
+    "경기":  ["경인", "경기북부"],   # 경기도 → 경인(남부)/경기북부 동일값
+    "광주":  ["광주전남"],
+    "전남":  ["광주전남"],
+    "대전":  ["대전충남"],
+    "충남":  ["대전충남"],
+    "세종":  ["대전충남"],
+    "강원":  ["강원", "강원영동"],    # 강원도 → 강원/강원영동 동일값
+    "충북":  ["충북"],
+    "전북":  ["전북"],
+    "경남":  ["경남"],
+    "제주":  ["제주"],
+}
+
 # 시도 표준화 사전
 REGION_REPLACE_DICT = {
     "서울특별시": "서울",
@@ -358,6 +379,28 @@ def parse_ari(df: pd.DataFrame) -> pd.Series:
     df = df.dropna(subset=["연도", "총합계"])
     result = df.groupby("연도")["총합계"].mean()
     return result
+
+
+def aggregate_disease_by_jibang(regional_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    시도별 감염병 발생률(parse_infectious_disease_regional 결과)을 지방청 단위로 집계.
+    - 복수 시도 → 1 지방청 (부산+울산 → 부산울산): 평균
+    - 1 시도 → 복수 지방청 (경기 → 경인/경기북부): 동일값 복사
+    반환: DataFrame with columns [지방청, 총발생률]
+    """
+    rows = []
+    for _, row in regional_df.iterrows():
+        sido = str(row["시도"]).strip()
+        rate = row["총발생률"]
+        for jibang in SIDO_TO_JIBANG_MAP.get(sido, []):
+            rows.append({"지방청": jibang, "총발생률": rate})
+
+    if not rows:
+        return pd.DataFrame(columns=["지방청", "총발생률"])
+
+    df = pd.DataFrame(rows)
+    # 복수 시도가 같은 지방청으로 합쳐지는 경우(부산울산 등) 평균
+    return df.groupby("지방청", as_index=False)["총발생률"].mean()
 
 
 def parse_infectious_disease_regional(df: pd.DataFrame) -> pd.DataFrame:

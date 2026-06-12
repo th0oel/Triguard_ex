@@ -20,6 +20,7 @@ from modules.preprocess import (
     parse_dapa_domestic,
     parse_dapa_foreign,
     parse_strategic_goods,
+    aggregate_disease_by_jibang,
 )
 from modules.risk_engine import (
     calc_manpower_risk,
@@ -64,10 +65,10 @@ st.divider()
 # ─────────────────────────────────────────────
 
 with st.sidebar:
-    st.header("📂 데이터 업로드")
+    st.header("데이터 업로드")
     mode = st.radio(
         "실행 모드",
-        ["📊 실제 데이터 모드", "🔬 시뮬레이션 모드"],
+        ["실제 데이터 모드", "시뮬레이션 모드"],
         index=0,
     )
 
@@ -88,7 +89,7 @@ with st.sidebar:
     f_strategic = st.file_uploader("전략물자_품목키워드.csv", type="csv", key="strategic")
 
     st.divider()
-    st.caption("ℹ️ 파일 미업로드 시 시뮬레이션 데이터 사용")
+    st.caption("파일 미업로드 시 시뮬레이션 데이터 사용")
 
 # ─────────────────────────────────────────────
 # 가중치 검증 (앱 시작 시 1회)
@@ -107,8 +108,8 @@ for name, weights in [
 # 시뮬레이션 모드
 # ─────────────────────────────────────────────
 
-if mode == "🔬 시뮬레이션 모드":
-    st.info("🔬 시뮬레이션 모드: 랜덤 생성 데이터를 사용합니다.")
+if mode == "시뮬레이션 모드":
+    st.info("시뮬레이션 모드: 랜덤 생성 데이터를 사용합니다.")
     seed = st.slider("시뮬레이션 시드", 0, 100, 42)
     result_df = generate_simulation_data(seed=seed)
 
@@ -147,67 +148,69 @@ if f_exam:
     try:
         raw = load_csv_from_upload(f_exam)
         exam_df = parse_byungmu_exam(raw)
-        st.success(f"✅ 병역판정검사 로드 완료: {len(exam_df)}행")
+        st.success(f"병역판정검사 로드 완료: {len(exam_df)}행")
     except KeyError as e:
-        st.error(f"❌ 병역판정검사: 필수 컬럼이 누락되었습니다. 컬럼 매핑을 확인하세요. ({e})")
+        st.error(f"병역판정검사: 필수 컬럼 누락 ({e})")
     except Exception as e:
-        st.error(f"❌ 병역판정검사 로드 오류: {e}")
+        st.error(f"병역판정검사 로드 오류: {e}")
 
 if f_enlist:
     try:
         raw = load_csv_from_upload(f_enlist)
         enlist_df = parse_byungmu_enlist(raw)
-        st.success(f"✅ 입영현황 로드 완료: {len(enlist_df)}행")
+        st.success(f"입영현황 로드 완료: {len(enlist_df)}행")
     except KeyError as e:
-        st.error(f"❌ 입영현황: 필수 컬럼이 누락되었습니다. 컬럼 매핑을 확인하세요. ({e})")
+        st.error(f"입영현황: 필수 컬럼 누락 ({e})")
     except Exception as e:
-        st.error(f"❌ 입영현황 로드 오류: {e}")
+        st.error(f"입영현황 로드 오류: {e}")
 
 if f_exempt:
     try:
         raw = load_csv_from_upload(f_exempt)
         exempt_df = parse_byungmu_exempt(raw)
-        st.success(f"✅ 병역면제 로드 완료: {len(exempt_df)}행")
+        st.success(f"병역면제 로드 완료: {len(exempt_df)}행")
     except Exception as e:
-        st.error(f"❌ 병역면제 로드 오류: {e}")
+        st.error(f"병역면제 로드 오류: {e}")
 
 # ── 질병관리청 ──
-regional_inc_df  = None
+regional_inc_df   = None
+jibang_disease_df = None
 national_weighted = 0.0
-flu_df    = None
+flu_df     = None
 ari_series = None
 
 if f_regional:
     try:
         raw = load_csv_from_upload(f_regional)
         regional_inc_df = parse_infectious_disease_regional(raw)
-        st.success(f"✅ 지역별 감염병 로드 완료: {len(regional_inc_df)}행")
+        st.success(f"지역별 감염병 로드 완료: {len(regional_inc_df)}행")
+        jibang_disease_df = aggregate_disease_by_jibang(regional_inc_df)
     except Exception as e:
-        st.error(f"❌ 지역별 감염병 로드 오류: {e}")
+        st.error(f"지역별 감염병 로드 오류: {e}")
 
 if f_national:
     try:
         raw = load_csv_from_upload(f_national)
         national_weighted = parse_infectious_disease_national(raw)
-        st.success(f"✅ 질병별 감염병 로드 완료 (가중합: {national_weighted:.1f})")
+        st.success(f"질병별 감염병 로드 완료 (가중합: {national_weighted:.1f})")
     except Exception as e:
-        st.error(f"❌ 질병별 감염병 로드 오류: {e}")
+        st.error(f"질병별 감염병 로드 오류: {e}")
 
 if f_flu:
     try:
         raw = load_csv_from_upload(f_flu)
         flu_df = parse_influenza(raw)
-        st.success(f"✅ 인플루엔자 로드 완료: {len(flu_df)}절기")
+        st.success(f"인플루엔자 로드 완료: {len(flu_df)}절기")
     except Exception as e:
-        st.error(f"❌ 인플루엔자 로드 오류: {e}")
+        st.error(f"인플루엔자 로드 오류: {e}")
 
 if f_ari:
     try:
         raw = load_csv_from_upload(f_ari)
         ari_series = parse_ari(raw)
-        st.success(f"✅ 급성호흡기 로드 완료: {len(ari_series)}년")
+        st.success(f"급성호흡기 로드 완료: {len(ari_series)}년")
     except Exception as e:
-        st.error(f"❌ 급성호흡기 로드 오류: {e}")
+        st.error(f"급성호흡기 로드 오류: {e}")
 
 # ── 방위사업청 ──
 domestic_info = {"총건수": 1, "총금액": 0, "수의계약건수": 0, "수의계약금액": 0, "업체별건수": pd.Series(dtype=float)}
@@ -218,56 +221,56 @@ if f_dapa_dom:
     try:
         raw = load_csv_from_upload(f_dapa_dom)
         domestic_info = parse_dapa_domestic(raw)
-        st.success(f"✅ 국내조달 로드 완료: {domestic_info['총건수']}건")
+        st.success(f"국내조달 로드 완료: {domestic_info['총건수']}건")
     except KeyError as e:
-        st.error(f"❌ 국내조달: 필수 컬럼이 누락되었습니다. 컬럼 매핑을 확인하세요. ({e})")
+        st.error(f"국내조달: 필수 컬럼 누락 ({e})")
     except Exception as e:
-        st.error(f"❌ 국내조달 로드 오류: {e}")
+        st.error(f"국내조달 로드 오류: {e}")
 
 if f_dapa_for:
     try:
         raw = load_csv_from_upload(f_dapa_for)
         foreign_info = parse_dapa_foreign(raw)
-        st.success(f"✅ 국외조달 로드 완료: {foreign_info['국외총건수']}건")
+        st.success(f"국외조달 로드 완료: {foreign_info['국외총건수']}건")
     except Exception as e:
-        st.error(f"❌ 국외조달 로드 오류: {e}")
+        st.error(f"국외조달 로드 오류: {e}")
 
 if f_strategic:
     try:
         raw = load_csv_from_upload(f_strategic)
         strategic_info = parse_strategic_goods(raw)
-        st.success(f"✅ 전략물자 로드 완료: {strategic_info['전략물자품목수']}품목")
+        st.success(f"전략물자 로드 완료: {strategic_info['전략물자품목수']}품목")
     except Exception as e:
-        st.error(f"❌ 전략물자 로드 오류: {e}")
+        st.error(f"전략물자 로드 오류: {e}")
 
 # ─────────────────────────────────────────────
 # Risk Score 계산
 # ─────────────────────────────────────────────
 
 if exam_df is None:
-    st.warning("⚠️ 병역판정검사 데이터가 없어 인력 Risk 계산이 불가합니다. 시뮬레이션 모드를 사용하세요.")
+    st.warning("병역판정검사 데이터가 없어 인력 Risk 계산이 불가합니다. 시뮬레이션 모드를 사용하세요.")
     st.stop()
 
 st.divider()
-st.subheader("⚙️ Risk Score 계산 중...")
+st.subheader("Risk Score 계산 중...")
 
 with st.spinner("인력 Risk 계산 중..."):
     try:
         manpower_df, mp_warnings = calc_manpower_risk(exam_df, enlist_df, exempt_df)
         all_warnings.extend(mp_warnings)
     except Exception as e:
-        st.error(f"❌ 인력 Risk 계산 실패: {e}\n{traceback.format_exc()}")
+        st.error(f"인력 Risk 계산 실패: {e}\n{traceback.format_exc()}")
         st.stop()
 
 with st.spinner("감염병 DC 계산 중..."):
     try:
-        dc_score, regional_scored, dc_components, dc_warnings = calc_disease_dc(
-            regional_inc_df, national_weighted, flu_df, ari_series
+        dc_score, regional_scored, jibang_dc_df, dc_components, dc_warnings = calc_disease_dc(
+            regional_inc_df, national_weighted, flu_df, ari_series, jibang_disease_df
         )
         all_warnings.extend(dc_warnings)
     except Exception as e:
-        st.error(f"❌ 감염병 DC 계산 실패: {e}")
-        dc_score, dc_components, dc_warnings = 30.0, {}, []
+        st.error(f"감염병 DC 계산 실패: {e}")
+        dc_score, regional_scored, jibang_dc_df, dc_components, dc_warnings = 30.0, None, None, {}, []
 
 with st.spinner("물자 Risk 계산 중..."):
     try:
@@ -276,15 +279,15 @@ with st.spinner("물자 Risk 계산 중..."):
         )
         all_warnings.extend(mat_warnings)
     except Exception as e:
-        st.error(f"❌ 물자 Risk 계산 실패: {e}")
+        st.error(f"물자 Risk 계산 실패: {e}")
         mat_score, mat_components = 30.0, {}
 
 with st.spinner("통합 Risk Score 계산 중..."):
     try:
-        result_df, int_warnings = calc_integrated_risk(manpower_df, dc_score, mat_score)
+        result_df, int_warnings = calc_integrated_risk(manpower_df, dc_score, mat_score, jibang_dc_df)
         all_warnings.extend(int_warnings)
     except Exception as e:
-        st.error(f"❌ 통합 Risk 계산 실패: {e}")
+        st.error(f"통합 Risk 계산 실패: {e}")
         st.stop()
 
 render_warnings(all_warnings)
@@ -298,7 +301,7 @@ st.subheader("📊 통합 Risk Score 현황")
 render_kpi_cards(result_df)
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📋 통합 결과", "👥 인력 세부", "🦠 감염병 DC", "🏭 물자 Risk", "🚨 대응 가이드"
+    "통합 결과", "인력 세부", "감염병 DC", "물자 Risk", "대응 가이드"
 ])
 
 with tab1:
@@ -339,7 +342,7 @@ with tab4:
     render_material_components(mat_components, mat_score)
 
 with tab5:
-    st.markdown("#### 🚨 위험·주의 권역 대응 가이드")
+    st.markdown("#### 위험·주의 권역 대응 가이드")
     render_response_guide(result_df)
 
 # ─────────────────────────────────────────────
