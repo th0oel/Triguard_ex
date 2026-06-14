@@ -18,7 +18,8 @@ triguard-ai/
 └── modules/
     ├── preprocess.py    # 인코딩 자동감지, 지역명 표준화, CSV 파싱 함수군
     ├── risk_engine.py   # Risk Score 계산 엔진 + 가중치 상수 (WEIGHTS_*)
-    └── visualize.py     # Streamlit 시각화, KPI 카드, 대응 가이드 렌더링
+    ├── ml_engine.py     # RandomForest 기반 AI 위험 예측, 이상 탐지, 추세 분석
+    └── visualize.py     # Streamlit 시각화, KPI 카드, 지도, AI 결과, 대응 가이드 렌더링
 ```
 
 ---
@@ -54,7 +55,9 @@ print(ngrok.connect(8501))
 | 질병관리청 | `급성호흡기감염증.csv` | ARI 트렌드 지수 |
 | 방위사업청 | `국내조달_계약정보.csv` | 물자 Risk 핵심 |
 | 방위사업청 | `국외조달_계약정보.csv` | 국외 의존도 |
+| 방위사업청 | `국내조달_입찰참여업체정보.csv` | HHI·공급업체다양성지수 |
 | 무역안보관리원 | `전략물자_품목키워드.csv` | 전략물자 비율 |
+| 행정안전부 | `지역별_연령별_주민등록_인구현황.csv` | 병역자원비율 보조 |
 
 파일 미업로드 시 시뮬레이션 모드(랜덤 시드 기반 더미 데이터)로 전환됩니다.
 
@@ -126,6 +129,8 @@ DC_지방청 = 0.35 × 발생률지수_지방청
 | 공급업체 집중도 | `상위 5개 업체 건수 / 국내 총건수 × 100` |
 | 수의계약 의존도 | `수의계약건수 / 국내 총건수 × 100` |
 | 전략물자 비율지수 | `전략물자 품목수 / 국내 총건수 × 1000` |
+| HHI (허핀달-허쉬만 지수) | `Σ(업체 점유율²)` — 0(완전경쟁) ~ 1(독점) |
+| 공급업체다양성지수 | `(1 − HHI) / (1 − 1/N) × 100` — 0~100, 높을수록 안전 |
 
 ### 4-4. 통합 Risk Score
 
@@ -151,6 +156,9 @@ DC_지방청 = 0.35 × 발생률지수_지방청
 
 - `normalize_region_sido / normalize_region_jibang` — 원본 지역명을 표준화. 공백·괄호 제거 → 사전 매핑 → startswith → fuzzy matching (cutoff 0.6–0.75) 순서로 fallback.
 - `aggregate_disease_by_jibang(regional_df)` — `SIDO_TO_JIBANG_MAP`을 사용해 17개 시도를 14개 지방청 단위로 집계. N:1 매핑은 평균, 1:N 매핑은 동일값 복사.
+- `parse_infectious_disease_regional / _national` — 지역별 총발생률 합산(광역 단위 추출) 및 1·2·3급 가중합(가중치 3·2·1) 계산.
+- `parse_population` — 행정안전부 인구 데이터 파싱. 병역자원비율 = `20대 남성 / 총인구 × 100`, 지방청 단위 집계.
+- `parse_dapa_bidders` — 입찰참여업체 정보에서 HHI(허핀달-허쉬만 지수, 0–1) 및 공급업체다양성지수(0–100) 산출.
 - `safe_divide(num, denom)` — 분모 0·NaN 방지. 전 모듈에서 나눗셈에 일괄 적용.
 
 ### risk_engine.py
@@ -159,11 +167,25 @@ DC_지방청 = 0.35 × 발생률지수_지방청
 - `calc_disease_dc(..., jibang_disease_df)` — 지방청별 발생률지수를 계산 후 DC를 산출, `jibang_dc_df[지방청, 발생률지수, 감염병DC]`를 반환.
 - `calc_integrated_risk(..., jibang_dc_df)` — `manpower_df`와 `jibang_dc_df`를 LEFT JOIN. 매핑 실패한 지방청은 전국 대표값으로 fallback하고 경고를 반환.
 
+### ml_engine.py
+
+- `train_risk_model(result_df)` — 통합 Risk Score 기반 RandomForest 분류 모델 학습. 교차검증 점수(cv_score) 반환.
+- `predict_risk(model, scaler, result_df)` — 학습된 모델로 위험등급 예측 및 클래스별 확률(정상·주의·위험) 반환.
+- `cross_agency_correlation(manpower_df, jibang_dc_df)` — 인력 Risk와 감염병 DC 간 상관계수 산출 및 복합 위험 권역 탐지.
+- `detect_anomaly_regions(result_df)` — Z-score ≥ 1.5 기준으로 통합 Risk 이상 권역 탐지.
+- `forecast_manpower(exam_df, forecast_years)` — 처분인원 연도별 추세 선형 회귀로 향후 N년 예측.
+
 ### visualize.py
 
 - `render_kpi_cards` — 위험/주의/정상/전체 권역 수를 4개 metric 카드로 표시.
+- `render_map(result_df, score_col)` — 지방청별 Risk Score를 지도 위에 시각화.
 - `apply_risk_style` — 점수(≥60 빨강, ≥35 노랑, 미만 초록) 및 등급 셀에 배경색 적용.
 - `render_response_guide` — 위험·주의 권역에 대해 주요 위험 요인(인력·감염병·물자 중 최고 점수)을 판별 후 rule-based 권고 조치 출력.
+- `render_ml_prediction` — Rule-based 등급과 ML 예측 등급 비교 테이블 및 불일치 권역 강조.
+- `render_feature_importance` — RandomForest 피처 중요도 바 차트 렌더링.
+- `render_cross_agency_scatter` — 인력 Risk vs 감염병 DC 산점도 및 상관계수 표시.
+- `render_manpower_trend` — 처분인원 연도별 추세 및 미래 예측 라인 차트.
+- `render_anomaly_table` — Z-score 기반 이상 탐지 결과 테이블 렌더링.
 
 ---
 

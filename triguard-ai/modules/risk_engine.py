@@ -1,3 +1,4 @@
+
 # modules/risk_engine.py
 """
 TriGuard AI - Risk Score 계산 엔진
@@ -78,26 +79,32 @@ def grade(score: float) -> str:
 # 인력 Risk Score
 # ─────────────────────────────────────────────
 
-def calc_manpower_risk(exam_df: pd.DataFrame, enlist_df: pd.DataFrame, exempt_df: pd.DataFrame) -> pd.DataFrame:
+def calc_manpower_risk(
+    exam_df: pd.DataFrame,
+    enlist_df: pd.DataFrame,
+    exempt_df: pd.DataFrame,
+    population_df: pd.DataFrame = None,
+) -> pd.DataFrame:
     """
     지방청별 인력 Risk Score 계산.
 
     exam_df: 병역판정검사 (연도, 지방청, 처분인원, 현역, 병역면제, 재신체검사)
     enlist_df: 입영현황 (지방청, 입영실통지, 입영, 행방불명, 기피)
     exempt_df: 병역면제 (지방청, 계)
+    population_df: 행정안전부 인구 (지방청, 총인구, 남성20대, 병역자원비율) — 선택
     """
     warnings = validate_weights(WEIGHTS_MANPOWER, "인력 Risk")
     results = []
 
-    # 최신 2개 연도 추출
+    # 연도 범위: 최신 연도 vs 가장 오래된 연도 (최대 7년) 비교
+    # → 단순 전년 대비가 아닌 중장기 감소 추세 반영
     years = sorted(exam_df["연도"].unique())
-    if len(years) < 2:
-        # 연도가 1개뿐이면 감소율=0으로 처리
-        latest_year = years[-1]
-        prev_year = latest_year
-    else:
-        latest_year = years[-1]
-        prev_year = years[-2]
+    latest_year = years[-1]
+    # 기준 연도: 최신 연도 기준 최대 6년 전 (데이터가 없으면 가장 오래된 연도)
+    target_base_year = latest_year - 6
+    base_candidates = [y for y in years if y <= target_base_year]
+    prev_year = base_candidates[-1] if base_candidates else years[0]
+    year_gap = max(latest_year - prev_year, 1)  # 연수 차이 (0 방지)
 
     latest_exam = exam_df[exam_df["연도"] == latest_year]
     prev_exam   = exam_df[exam_df["연도"] == prev_year]
@@ -113,17 +120,18 @@ def calc_manpower_risk(exam_df: pd.DataFrame, enlist_df: pd.DataFrame, exempt_df
         if row_now.empty:
             continue
 
-        # ① 입영인원 감소율
-        enlist_now  = row_enl["입영"].values[0] if (not row_enl.empty and "입영" in row_enl.columns) else 0
-        # 입영 데이터가 단년이라 prev 없음 → exam의 현역으로 대리
+        # ① 입영인원 감소율 (현역 기준, 기준연도 대비 최신연도)
         exam_now  = float(row_now["현역"].values[0]) if "현역" in row_now.columns else 0
         exam_prev = float(row_prev["현역"].values[0]) if (not row_prev.empty and "현역" in row_prev.columns) else exam_now
-        입영_감소율 = clip_score(safe_divide(exam_prev - exam_now, exam_prev + 1e-9) * 100)
+        # 연간 평균 감소율로 정규화 (연수 차이로 나눔 → 연평균 % 감소)
+        raw_감소율 = safe_divide(exam_prev - exam_now, exam_prev + 1e-9) * 100
+        입영_감소율 = clip_score(raw_감소율 * (6 / year_gap))  # 6년 기준 정규화
 
-        # ② 병역판정검사 감소율
+        # ② 병역판정검사 감소율 (기준연도 대비)
         proc_now  = float(row_now["처분인원"].values[0]) if "처분인원" in row_now.columns else 0
         proc_prev = float(row_prev["처분인원"].values[0]) if (not row_prev.empty and "처분인원" in row_prev.columns) else proc_now
-        검사_감소율 = clip_score(safe_divide(proc_prev - proc_now, proc_prev + 1e-9) * 100)
+        raw_검사감소 = safe_divide(proc_prev - proc_now, proc_prev + 1e-9) * 100
+        검사_감소율 = clip_score(raw_검사감소 * (6 / year_gap))  # 6년 기준 정규화
 
         # ③ 병역면제율 (면제자 / 처분인원)
         exempt_total = float(row_ex["계"].values[0]) if (not row_ex.empty and "계" in row_ex.columns) else 0
@@ -140,6 +148,17 @@ def calc_manpower_risk(exam_df: pd.DataFrame, enlist_df: pd.DataFrame, exempt_df
         notif = float(row_enl["입영실통지"].values[0]) if (not row_enl.empty and "입영실통지" in row_enl.columns) else 1
         차질률 = clip_score(safe_divide(miss + evas, notif) * 100)
 
+        # ⑥ 인구 대비 병역자원 비율 보정 (행정안전부 데이터)
+        # 20대 남성 비율이 낮을수록 인력 부족 위험 → 높은 점수
+        pop_penalty = 0.0
+        if population_df is not None and not population_df.empty:
+            pop_row = population_df[population_df["지방청"] == region]
+            if not pop_row.empty and "병역자원비율" in pop_row.columns:
+                ratio = float(pop_row["병역자원비율"].values[0])
+                # 평균 비율(전국 약 7%) 대비 낮을수록 위험
+                # 5% 이하 → 40점, 7% → 0점, 9% 이상 → -20점(보정)
+                pop_penalty = clip_score((7.0 - ratio) / 7.0 * 40)
+
         score = (
             WEIGHTS_MANPOWER["입영인원_감소율"]     * 입영_감소율 +
             WEIGHTS_MANPOWER["병역판정검사_감소율"] * 검사_감소율 +
@@ -147,6 +166,8 @@ def calc_manpower_risk(exam_df: pd.DataFrame, enlist_df: pd.DataFrame, exempt_df
             WEIGHTS_MANPOWER["재신체검사율"]        * 재검율 +
             WEIGHTS_MANPOWER["입영_차질률"]         * 차질률
         )
+        # 인구 보정 (가중치 10% 반영)
+        score = score * 0.9 + pop_penalty * 0.1
 
         results.append({
             "지방청": region,
@@ -155,6 +176,7 @@ def calc_manpower_risk(exam_df: pd.DataFrame, enlist_df: pd.DataFrame, exempt_df
             "병역면제율":          round(면제율, 2),
             "재신체검사율":        round(재검율, 2),
             "입영_차질률":         round(차질률, 2),
+            "인구_보정점수":       round(pop_penalty, 2),
             "인력Risk": round(clip_score(score), 2),
         })
 
@@ -183,20 +205,27 @@ def calc_disease_dc(
 
     # ── 공통 국가 수준 지표 ──────────────────────
     # ② 질병 등급 가중합 → 100점 스케일
-    grade_score = clip_score(np.log1p(national_weighted) * 5) if national_weighted > 0 else 0.0
+    # 실데이터 기준: 2358 → 약 45점, 5000 → 약 60점, 10000 → 100점
+    grade_score = clip_score(np.log1p(national_weighted) / np.log1p(10000) * 100) if national_weighted > 0 else 0.0
 
     # ③ 인플루엔자 유행강도
+    # 전체 절기 중 최대분율 대비 최신 절기 최대분율 비율로 정규화
     if influenza_df is not None and not influenza_df.empty:
-        latest_max = influenza_df["최대분율"].dropna().iloc[-1] if len(influenza_df) > 0 else 0
-        flu_score = clip_score(float(latest_max) * 2.5)
+        all_max = influenza_df["최대분율"].dropna()
+        latest_max = float(all_max.iloc[-1])
+        historical_max = float(all_max.max()) if len(all_max) > 0 else 100
+        # 역사적 최대 대비 현재 비율 → 0~60점 스케일
+        flu_score = clip_score(safe_divide(latest_max, historical_max) * 60)
     else:
         flu_score = 30.0
 
-    # ④ 급성호흡기 트렌드
+    # ④ 급성호흡기 트렌드 (최근 2년 대비 증감)
     if ari_series is not None and len(ari_series) >= 2:
         vals = ari_series.sort_index().values
-        ari_trend = safe_divide(vals[-1] - vals[-2], vals[-2] + 1e-9) * 100
-        ari_score = clip_score(50 + ari_trend)
+        # 전체 범위 대비 현재 수준으로 정규화
+        current = vals[-1]
+        historical_max = max(vals)
+        ari_score = clip_score(safe_divide(current, historical_max) * 60)
     else:
         ari_score = 30.0
 
@@ -213,8 +242,11 @@ def calc_disease_dc(
     if jibang_disease_df is not None and not jibang_disease_df.empty and "총발생률" in jibang_disease_df.columns:
         max_rate = jibang_disease_df["총발생률"].max()
         jd = jibang_disease_df.copy()
+        # 절대값 기준 정규화: 1000 이하=0점, 1600 이상=100점
+        RATE_MIN = 800.0   # 정상 기준
+        RATE_MAX = 1600.0  # 위험 기준 (실데이터 최대치 기반)
         jd["발생률지수"] = jd["총발생률"].apply(
-            lambda x: clip_score(safe_divide(x, max_rate) * 100)
+            lambda x: clip_score(safe_divide(x - RATE_MIN, RATE_MAX - RATE_MIN) * 100)
         )
         jd["감염병DC"] = jd["발생률지수"].apply(_dc_from_regional_index).round(2)
         jibang_dc_df = jd[["지방청", "발생률지수", "감염병DC"]]
@@ -257,12 +289,14 @@ def calc_disease_dc(
 # ─────────────────────────────────────────────
 
 def calc_material_risk(
-    domestic: dict,     # parse_dapa_domestic 결과
-    foreign: dict,      # parse_dapa_foreign 결과
-    strategic: dict,    # parse_strategic_goods 결과
+    domestic: dict,         # parse_dapa_domestic 결과
+    foreign: dict,          # parse_dapa_foreign 결과
+    strategic: dict,        # parse_strategic_goods 결과
+    bidders: dict = None,   # parse_dapa_bidders 결과 (선택)
 ) -> tuple:
     """
     방위사업청 기반 전국 물자 Risk Score.
+    bidders: parse_dapa_bidders 결과 — 공급업체 다양성 지수 반영
     지역 단위 없음 → 전국 단일값. 모든 지방청에 동일 적용.
     """
     warnings = validate_weights(WEIGHTS_MATERIAL, "물자 Risk")
@@ -279,13 +313,17 @@ def calc_material_risk(
     # ② 국외조달 의존도
     국외의존도 = clip_score(safe_divide(total_foreign, total_all) * 100)
 
-    # ③ 공급업체 집중도 (상위 5개 업체 점유율)
-    company_counts = domestic.get("업체별건수", pd.Series(dtype=float))
-    if len(company_counts) > 0:
-        top5_share = safe_divide(company_counts.head(5).sum(), total_domestic) * 100
-        집중도 = clip_score(top5_share)
+    # ③ 공급업체 집중도 — 입찰업체정보 있으면 HHI 기반, 없으면 계약정보 기반
+    if bidders is not None and bidders.get("고유업체수", 0) > 0:
+        diversity = bidders.get("공급업체다양성지수", 50.0)
+        집중도 = clip_score(100 - diversity)
     else:
-        집중도 = 50.0
+        company_counts = domestic.get("업체별건수", pd.Series(dtype=float))
+        if len(company_counts) > 0:
+            top5_share = safe_divide(company_counts.head(5).sum(), total_domestic) * 100
+            집중도 = clip_score(top5_share)
+        else:
+            집중도 = 50.0
 
     # ④ 수의계약 의존도
     수의건수 = domestic.get("수의계약건수", 0)
@@ -310,6 +348,9 @@ def calc_material_risk(
         "수의계약_의존도":      round(수의의존도, 2),
         "전략물자_비율_지수":   round(전략비율, 2),
     }
+    if bidders is not None:
+        components["입찰업체_고유수"]     = bidders.get("고유업체수", 0)
+        components["공급업체_다양성지수"] = bidders.get("공급업체다양성지수", 0)
 
     return clip_score(score), components, warnings
 
